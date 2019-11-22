@@ -1,5 +1,7 @@
 import argparse
 import h5py
+import logging
+import os
 import torch
 from torch import nn, optim
 from torch.optim import lr_scheduler
@@ -10,6 +12,28 @@ from tqdm import tqdm
 from model.utils import AverageMeter
 from nli.NLIDataset import NliDataset
 from nli.nli_models.PpoModel import PpoModel
+
+def get_logger(exp_name):
+    log_path = "../nli/logs/log"
+    if not os.path.exists(log_path):
+        os.makedirs(log_path)
+    logger = logging.getLogger("general_logger")
+    handler = logging.FileHandler(f"{log_path}/{exp_name}.log", mode='w')
+    formatter = logging.Formatter("%(asctime)s - %(message)s", "%d-%m-%Y %H:%M:%S")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    return logger
+
+
+def get_summary_writer(exp_name):
+    tensorboard_path = f"../nli/logs/tensorboard"
+    if not os.path.exists(tensorboard_path):
+        os.makedirs(tensorboard_path)
+    summary_writer = dict()
+    summary_writer["train"] = SummaryWriter(log_dir=os.path.join(tensorboard_path, 'exp-' + exp_name, 'train'))
+    summary_writer["valid"] = SummaryWriter(log_dir=os.path.join(tensorboard_path, 'exp-' + exp_name, 'valid'))
+    return summary_writer
 
 
 def get_dataloader(args):
@@ -61,7 +85,7 @@ def get_optimizer(args, policy_parameters, env_parameters):
     return optimizer, scheduler
 
 
-def test(test_data, model, epoch, device):
+def test(test_data, model, epoch, device, logger):
     model.eval()
     ce_loss_meter = AverageMeter()
     accuracy_meter = AverageMeter()
@@ -90,10 +114,12 @@ def test(test_data, model, epoch, device):
             entropy_meter.update(entropy.item(), n)
             n_entropy_meter.update(normalized_entropy.item(), n)
 
+    logger.info(f"Test: ce_loss: {ce_loss_meter.avg:.4f} accuracy: {accuracy_meter.avg:.4f} "
+                f"entropy: {entropy_meter.avg:.4f} n_entropy: {n_entropy_meter.avg:.4f} ")
     return accuracy_meter.avg
 
 
-def validate(valid_data, model, epoch, device):
+def validate(valid_data, model, epoch, device, logger, summary_writer):
     model.eval()
     ce_loss_meter = AverageMeter()
     accuracy_meter = AverageMeter()
@@ -118,13 +144,17 @@ def validate(valid_data, model, epoch, device):
             ce_loss_meter.update(ce_loss.item(), n)
             entropy_meter.update(entropy.item(), n)
             n_entropy_meter.update(normalized_entropy.item(), n)
+    logger.info(f"Valid: epoch: {epoch} ce_loss: {ce_loss_meter.avg:.4f} accuracy: {accuracy_meter.avg:.4f} "
+                f"entropy: {entropy_meter.avg:.4f} n_entropy: {n_entropy_meter.avg:.4f} ")
+    summary_writer["valid"].add_scalar(tag="ce", scalar_value=ce_loss_meter.avg, global_step=global_step)
+    summary_writer["valid"].add_scalar(tag="accuracy", scalar_value=accuracy_meter.avg, global_step=global_step)
+    summary_writer["valid"].add_scalar(tag="n_entropy", scalar_value=n_entropy_meter.avg, global_step=global_step)
+
     model.train()
-    # TODO(siyu) not sure here
-    # TODO(siyu) adding logger here
     return accuracy_meter.avg
 
 
-def train(train_data, valid_data, model, optimizers, schedulers, epoch, args):
+def train(train_data, valid_data, model, optimizers, schedulers, epoch, args, logger, summary_writer):
     ce_loss_meter = AverageMeter()
     accuracy_meter = AverageMeter()
     entropy_meter = AverageMeter()
@@ -170,16 +200,27 @@ def train(train_data, valid_data, model, optimizers, schedulers, epoch, args):
             prob_ratio_meter.update((1.0 - prob_ratio.detach()).abs().mean().item(), n)
 
             global global_step
+            summary_writer["train"].add_scalar(tag="ce", scalar_value=ce_loss.item(), global_step=global_step)
+            summary_writer["train"].add_scalar(tag="accuracy", scalar_value=accuracy.item(), global_step=global_step)
+            summary_writer["train"].add_scalar(tag="n_entropy", scalar_value=normalized_entropy.item(),
+                                               global_step=global_step)
+            summary_writer["train"].add_scalar(tag="prob_ratio", scalar_value=prob_ratio_meter.value,
+                                               global_step=global_step)
+
             global_step += 1
 
-            if (batch_idx+1) % (len(train_data) // 3) == 0:
-                new_val_accuracy = validate(valid_data, model, epoch, device)
+            if (batch_idx+1) % (len(train_data) // 10) == 0:
+                logger.info(f"Train: epoch: {epoch} batch_idx: {batch_idx + 1} ce_loss: {ce_loss_meter.avg:.4f} "
+                            f"accuracy: {accuracy_meter.avg:.4f} entropy: {entropy_meter.avg:.4f} "
+                            f"n_entropy: {n_entropy_meter.avg:.4f}")
+                new_val_accuracy = validate(valid_data, model, epoch, device, logger, summary_writer)
                 # TODO(siyu) how scheduler works
                 schedulers["environment"].step(new_val_accuracy)
                 schedulers["policy"].step(new_val_accuracy)
                 global best_model_path, best_val_accuracy
                 if new_val_accuracy > best_val_accuracy:
                     best_model_path = f"{args.model_dir}/{epoch}-{batch_idx}.mdl"
+                    logger.info("saving model to"+best_model_path)
                     torch.save({"epoch":epoch, "batch_idx": batch_idx, "state_dict": model.state_dict()}, best_model_path)
                     best_val_accuracy = new_val_accuracy
 
@@ -191,6 +232,10 @@ def train(train_data, valid_data, model, optimizers, schedulers, epoch, args):
 
 
 def main(args):
+    exp_name = f"bs{args.batch_size}hd{args.hidden_dim}ppo{args.ppo_updates}ew{args.entropy_weight}"
+    logger = get_logger(exp_name)
+    summary_writer = get_summary_writer(exp_name)
+
     train_data, valid_data, test_data, vectors = get_dataloader(args)
     print("dataset size: ", len(train_data), len(valid_data), len(test_data))
 
@@ -208,13 +253,15 @@ def main(args):
     if args.freeze_embeddings:
         model.parser_embedding.weight.requires_grad = False
         model.tree_embedding.weight.requires_grad = False
+        logger.info("Using frozen embedding for parser and tree embedding layers.")
+
     optimizers, schedulers = get_optimizer(args, policy_parameters=model.get_policy_parameters(), env_parameters=model.get_environment_parameters())
 
     for epoch in range(args.max_epoch):
-        train(train_data, valid_data, model, optimizers, schedulers, epoch, args)
+        train(train_data, valid_data, model, optimizers, schedulers, epoch, args, logger, summary_writer)
     checkpoint = torch.load(best_model_path)
     model.load_state_dict(checkpoint["state_dict"])
-    test(test_data, model, args.gpu_id)
+    test(test_data, model, args.gpu_id, logger)
 
 
 if __name__ == "__main__":
