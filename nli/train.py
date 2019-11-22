@@ -4,6 +4,7 @@ import torch
 from torch import nn, optim
 from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader
+from tensorboardX import SummaryWriter
 from tqdm import tqdm
 
 from model.utils import AverageMeter
@@ -62,8 +63,11 @@ def get_optimizer(args, policy_parameters, env_parameters):
 
 def test(test_data, model, epoch, device):
     model.eval()
-    accuracy_list = []
-    n_list = []
+    ce_loss_meter = AverageMeter()
+    accuracy_meter = AverageMeter()
+    entropy_meter = AverageMeter()
+    n_entropy_meter = AverageMeter()
+
     with torch.no_grad():
         for labels, premises, p_mask, hypothese, h_mask in test_data:
             if torch.cuda.is_available():
@@ -80,17 +84,22 @@ def test(test_data, model, epoch, device):
             entropy = entropy.mean()
             normalized_entropy = normalized_entropy.mean()
             accuracy = (labels == pred_labels).to(dtype=torch.float32).mean()
-            accuracy_list.append(accuracy)
             n = p_mask.shape[0]
-            n_list.append(n)
+            accuracy_meter.update(accuracy.item(), n)
+            ce_loss_meter.update(ce_loss.item(), n)
+            entropy_meter.update(entropy.item(), n)
+            n_entropy_meter.update(normalized_entropy.item(), n)
 
-    return sum(accuracy_list) / sum(n_list)
+    return accuracy_meter.avg
 
 
 def validate(valid_data, model, epoch, device):
     model.eval()
-    accuracy_list = []
-    n_list = []
+    ce_loss_meter = AverageMeter()
+    accuracy_meter = AverageMeter()
+    entropy_meter = AverageMeter()
+    n_entropy_meter = AverageMeter()
+
     with torch.no_grad():
         for labels, premises, p_mask, hypotheses, h_mask in valid_data:
             if torch.cuda.is_available():
@@ -103,15 +112,16 @@ def validate(valid_data, model, epoch, device):
             pred_labels, ce_loss, rewards, actions, actions_log_prob, entropy, normalized_entropy = model(premises, p_mask, hypotheses, h_mask, labels)
             entropy = entropy.mean()
             normalized_entropy = normalized_entropy.mean()
-
-            accuracy = (labels == pred_labels).to(dtype=torch.float32).mean()
-            accuracy_list.append(accuracy)
             n = p_mask.shape[0]
-            n_list.append(n)
+            accuracy = (labels == pred_labels).to(dtype=torch.float32).mean()
+            accuracy_meter.update(accuracy.item(), n)
+            ce_loss_meter.update(ce_loss.item(), n)
+            entropy_meter.update(entropy.item(), n)
+            n_entropy_meter.update(normalized_entropy.item(), n)
     model.train()
     # TODO(siyu) not sure here
     # TODO(siyu) adding logger here
-    return sum(accuracy_list)/sum(n_list)
+    return accuracy_meter.avg
 
 
 def train(train_data, valid_data, model, optimizers, schedulers, epoch, args):
