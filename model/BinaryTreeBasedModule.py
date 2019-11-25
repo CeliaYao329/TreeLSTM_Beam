@@ -4,17 +4,61 @@ from torch import nn
 from model.BinaryTreeLstmCell import BinaryTreeLstmCell
 
 
-class BinaryTreeBasedModule(nn.Module):
+class LstmRnn(nn.Module):
     def __init__(self, input_dim, hidden_dim):
         super().__init__()
+        self.i_dim = input_dim
+        self.h_dim = hidden_dim
+        self.lstm = nn.LSTMCell(input_dim, hidden_dim)
+        self.h0 = nn.Parameter(torch.empty(size=(1, hidden_dim), dtype=torch.float32))
+        self.c0 = nn.Parameter(torch.empty(size=(1, hidden_dim), dtype=torch.float32))
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.constant_(self.h0, val=0)
+        nn.init.constant_(self.c0, val=0)
+
+        nn.init.xavier_uniform_(self.lstm.weight_ih)
+        nn.init.orthogonal_(self.lstm.weight_hh)
+        nn.init.constant_(self.lstm.bias_ih, val=0)
+        nn.init.constant_(self.lstm.bias_hh, val=0)
+
+    def forward(self, x, mask, backward=False):
+        # x: [B, L, word_dim]
+        # mask: [B, L]
+        L = x.shape[1]  # length of the sequence
+        prev_h = self.h0.expand(x.shape[0], -1)
+        prev_c = self.c0.expand(x.shape[0], -1)
+        # prev_h [B, hidden_dim]
+        # prev_c [B, hidden_dim]
+        h = []
+        for idx in range(L):
+            idx = L - 1 - idx if backward else idx
+            mask_idx = mask[:, idx, None]
+            # mask_idx: the idx column but with size[B, 1] not [B]
+            h_idx, c_idx = self.lstm(x[:, idx], (prev_h, prev_c))
+            # TODO not 100% sure of the use of mask and its relation with h/c
+            prev_h = h_idx * mask_idx + prev_h * (1. - mask_idx)
+            prev_c = c_idx * mask_idx + prev_c * (1. - mask_idx)
+            # prev_h [B, hidden_dim]
+            h.append(prev_h)
+        # return [B, L, hidden_dim]
+        return torch.stack(h[::-1] if backward else h, dim=1)
+
+
+class BinaryTreeBasedModule(nn.Module):
+    def __init__(self, input_dim, hidden_dim, dropout_prob, trans_hidden_dim):
+        super().__init__()
+        self.lstm = LstmRnn(input_dim, trans_hidden_dim)
         self.linear = nn.Linear(in_features=input_dim, out_features=2 * hidden_dim)
-        self.tree_lstm_cell = BinaryTreeLstmCell(hidden_dim)
+        self.tree_lstm_cell = BinaryTreeLstmCell(hidden_dim, dropout_prob)
         BinaryTreeBasedModule.reset_parameters(self)
 
     def reset_parameters(self):
         nn.init.orthogonal_(self.linear.weight)
         nn.init.constant_(self.linear.bias, val=0)
         self.tree_lstm_cell.reset_parameters()
+        self.lstm.reset_parameters()
 
     def forward(self, *inputs):
         raise NotImplementedError
@@ -25,6 +69,7 @@ class BinaryTreeBasedModule(nn.Module):
         # x: [B, L, input_dim]
         # mask: [B, L]
         # return two [B, L, hidden_dim] tensors --> h, c
+        x = self.lstm(x, mask)
         return self.linear(x).tanh().chunk(chunks=2, dim=-1)
 
     # TODO(siyu) purpose of mask

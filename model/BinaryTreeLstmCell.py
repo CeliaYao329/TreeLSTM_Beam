@@ -3,10 +3,12 @@ from torch import nn
 
 
 class BinaryTreeLstmCell(nn.Module):
-    def __init__(self, hidden_dim):
+    def __init__(self, hidden_dim, dropout_prob=None):
         super().__init__()
         self.h_dim = hidden_dim
         self.linear = nn.Linear(in_features=2 * self.h_dim, out_features=5 * self.h_dim)
+        if dropout_prob is not None:
+            self.dropout = nn.Dropout(dropout_prob)
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -25,8 +27,10 @@ class BinaryTreeLstmCell(nn.Module):
         g, i, f_l, f_r, o = self.linear(h_lr).chunk(chunks=5, dim=-1)
         g, i, f_l, f_r, o = g.tanh_(), i.sigmoid_(), f_l.sigmoid_(), f_r.sigmoid_(), o.sigmoid_()
         # g, i, f_l, f_r, o [B, L-1, hidden_dim]
-
-        c = i * g + f_l * c_l + f_r * c_r
+        if hasattr(self, "dropout"):
+            c = i * self.dropout(g) + f_l * c_l + f_r * c_r
+        else:
+            c = i * g + f_l * c_l + f_r * c_r
 
         h = o * c.tanh_()
         # h, c [B, L-1, hidden_dim]

@@ -65,9 +65,9 @@ def update_vocab(data, word_to_idx, idx_to_word, label_to_idx, idx_to_label, glo
 
 def main(glove, lower):
     # ================ load data and tokenize sentences ================
-    train_snli_data = load_data("nli/snli_1.0_train.jsonl", lower)
-    valid_snli_data = load_data("nli/snli_1.0_dev.jsonl", lower)
-    test_snli_data = load_data("nli/snli_1.0_test.jsonl", lower)
+    train_snli_data = load_data("../data/nli/snli_1.0_train.jsonl", lower)
+    valid_snli_data = load_data("../data/nli/snli_1.0_dev.jsonl", lower)
+    test_snli_data = load_data("../data/nli/snli_1.0_test.jsonl", lower)
     # test_snli_hard_data = load_data("nli/snli_1.0_test_hard.jsonl", lower)
 
     # ========== create vocabulary from train_data and save it =========
@@ -107,13 +107,13 @@ def main(glove, lower):
     preprocess_data(test_snli_data, label_to_idx, word_to_idx, unk_idx)
     # preprocess_data(test_snli_hard_data, label_to_idx, word_to_idx, unk_idx)
 
-    save_data(train_snli_data, f"nli/train_lower={lower}.pckl")
-    save_data(valid_snli_data, f"nli/valid_lower={lower}.pckl")
-    save_data(test_snli_data, f"nli/test_lower={lower}.pckl")
+    save_data(train_snli_data, f"../data/nli/train_lower={lower}.pckl")
+    save_data(valid_snli_data, f"../data/nli/valid_lower={lower}.pckl")
+    save_data(test_snli_data, f"../data/nli/test_lower={lower}.pckl")
     # save_data(test_snli_hard_data, f"nli/test_hard_lower={lower}.pckl")
 
 
 if __name__ == '__main__':
-    glove = load_glove("embedding/glove.840B.300d.txt")
+    glove = load_glove("../data/embedding/glove.840B.300d.txt")
     main(glove, lower=True)
     main(glove, lower=False)

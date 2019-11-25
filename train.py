@@ -154,7 +154,7 @@ def validate(valid_data, model, epoch, device, logger, summary_writer):
     return accuracy_meter.avg
 
 
-def train(train_data, valid_data, model, optimizers, schedulers, epoch, args, logger, summary_writer):
+def train(train_data, valid_data, model, optimizers, schedulers, epoch, args, logger, summary_writer, exp_name):
     ce_loss_meter = AverageMeter()
     accuracy_meter = AverageMeter()
     entropy_meter = AverageMeter()
@@ -210,16 +210,21 @@ def train(train_data, valid_data, model, optimizers, schedulers, epoch, args, lo
             global_step += 1
 
             if (batch_idx+1) % (len(train_data) // 10) == 0:
+
                 logger.info(f"Train: epoch: {epoch} batch_idx: {batch_idx + 1} ce_loss: {ce_loss_meter.avg:.4f} "
                             f"accuracy: {accuracy_meter.avg:.4f} entropy: {entropy_meter.avg:.4f} "
                             f"n_entropy: {n_entropy_meter.avg:.4f}")
                 new_val_accuracy = validate(valid_data, model, epoch, device, logger, summary_writer)
+                print(f"validationg accuracy: {new_val_accuracy}")
                 # TODO(siyu) how scheduler works
                 schedulers["environment"].step(new_val_accuracy)
                 schedulers["policy"].step(new_val_accuracy)
                 global best_model_path, best_val_accuracy
                 if new_val_accuracy > best_val_accuracy:
-                    best_model_path = f"{args.model_dir}/{epoch}-{batch_idx}.mdl"
+                    model_dir = f"{args.model_dir}/{exp_name}"
+                    if not os.path.exists(model_dir):
+                        os.makedirs(model_dir)
+                    best_model_path = f"{args.model_dir}/{exp_name}/{epoch}-{batch_idx}.mdl"
                     logger.info("saving model to"+best_model_path)
                     torch.save({"epoch":epoch, "batch_idx": batch_idx, "state_dict": model.state_dict()}, best_model_path)
                     best_val_accuracy = new_val_accuracy
@@ -238,12 +243,13 @@ def main(args):
 
     train_data, valid_data, test_data, vectors = get_dataloader(args)
     print("dataset size: ", len(train_data), len(valid_data), len(test_data))
-
     model = PpoModel(vocab_size=args.vocab_size,
                      word_dim=args.word_dim,
                      hidden_dim=args.hidden_dim,
                      mlp_hidden_dim=args.mlp_hidden_dim,
-                     label_dim=args.label_size)
+                     label_dim=args.label_size,
+                     dropout_prob=args.dropout_prob,
+                     use_batchnorm=args.use_batchnorm)
     if torch.cuda.is_available():
         model = model.cuda(args.gpu_id)
     dtype = model.parser_embedding.weight.data.dtype
@@ -258,7 +264,7 @@ def main(args):
     optimizers, schedulers = get_optimizer(args, policy_parameters=model.get_policy_parameters(), env_parameters=model.get_environment_parameters())
 
     for epoch in range(args.max_epoch):
-        train(train_data, valid_data, model, optimizers, schedulers, epoch, args, logger, summary_writer)
+        train(train_data, valid_data, model, optimizers, schedulers, epoch, args, logger, summary_writer, exp_name)
     checkpoint = torch.load(best_model_path)
     model.load_state_dict(checkpoint["state_dict"])
     test(test_data, model, args.gpu_id, logger)
@@ -266,9 +272,11 @@ def main(args):
 
 if __name__ == "__main__":
     args = {
-        "gpu-id": -1,
+        "gpu-id": 0,
         "lower": "True",
         "batch-size": 8,
+        "use-batchnorm": "True",
+        "dropout-prob": 0.1,
         "max-len": 120,
         "word-dim": 300,
         "hidden-dim": 256,
@@ -283,10 +291,15 @@ if __name__ == "__main__":
         "env-lr": 1.0,
         "pol-lr": 1.0,
         "epsilon": 0.2,
+        "model-dir": "nli/checkpoints",
     }
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--lower", default=args["lower"],
                         type=lambda val: True if val == "True" else False)
+    parser.add_argument("--use-batchnorm", default=args["use-batchnorm"],
+                        type=lambda val: True if val == "True" else False)
+    parser.add_argument("--dropout-prob", default=args["dropout-prob"], type=float)
     parser.add_argument("--freeze-embeddings", default=args["freeze-embeddings"],
                         type=lambda val: True if val == "True" else False)
     parser.add_argument("--gpu-id", required=False, default=args["gpu-id"], type=int)
@@ -306,6 +319,7 @@ if __name__ == "__main__":
     parser.add_argument("--env-lr", required=False, default=args["env-lr"], type=float)
     parser.add_argument("--pol-lr", required=False, default=args["pol-lr"], type=float)
     parser.add_argument("--epsilon", required=False, default=args["epsilon"], type=float)
+    parser.add_argument("--model-dir", required=False, default=args["model-dir"], type=str)
 
     global_step = 0
     best_model_path = None

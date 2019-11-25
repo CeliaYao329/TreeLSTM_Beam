@@ -6,8 +6,8 @@ from model.BinaryTreeBasedModule import BinaryTreeBasedModule
 
 
 class BottomUpTreeLstmParser(BinaryTreeBasedModule):
-    def __init__(self, input_dim, hidden_dim):
-        super().__init__(input_dim, hidden_dim)
+    def __init__(self, input_dim, hidden_dim, dropout_prob=None):
+        super().__init__(input_dim, hidden_dim, dropout_prob)
         self.q = nn.Parameter(torch.empty(size=(hidden_dim,), dtype=torch.float32))
         self.reset_parameters()
 
