@@ -14,7 +14,7 @@ from nli.NLIDataset import NliDataset
 from nli.nli_models.PpoModel import PpoModel
 
 def get_logger(exp_name):
-    log_path = "nli/logs/log"
+    log_path = "../nli/logs/log"
     if not os.path.exists(log_path):
         os.makedirs(log_path)
     logger = logging.getLogger("general_logger")
