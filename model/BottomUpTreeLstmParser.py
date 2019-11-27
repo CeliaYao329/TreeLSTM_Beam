@@ -6,8 +6,8 @@ from model.BinaryTreeBasedModule import BinaryTreeBasedModule
 
 
 class BottomUpTreeLstmParser(BinaryTreeBasedModule):
-    def __init__(self, input_dim, hidden_dim, dropout_prob=None):
-        super().__init__(input_dim, hidden_dim, dropout_prob)
+    def __init__(self, input_dim, hidden_dim, dropout_prob, trans_hidden_dim):
+        super().__init__(input_dim, hidden_dim, dropout_prob, trans_hidden_dim)
         self.q = nn.Parameter(torch.empty(size=(hidden_dim,), dtype=torch.float32))
         self.reset_parameters()
 
@@ -35,12 +35,12 @@ class BottomUpTreeLstmParser(BinaryTreeBasedModule):
             entropy.append(cat_distribution.entropy())
             normalized_entropy.append(cat_distribution.normalized_entropy())
             log_prob.append(cat_distribution.log_prob(actions_i))
-        log_prob = sum(log_prob)
+        log_prob = sum(log_prob)    # [B]
         entropy = sum(entropy)
         # normalize by the number of layers - 1.
         # -1 because the last layer contains only one possible action and the entropy is zero anyway.
 
-        # TODO: mask
+        # TODO: normalized entropy are all 1
         normalized_entropy = sum(normalized_entropy) / (torch.sum(mask[:, 2:], dim=-1) + 1e-17)
         return probs, entropy, normalized_entropy, actions, log_prob
 

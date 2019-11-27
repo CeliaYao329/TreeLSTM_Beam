@@ -1,7 +1,7 @@
 from nli.nli_models.ReinforceModel import ReinforceModel
 
 class PpoModel(ReinforceModel):
-    def evaluataion_actions(self, premises, p_mask, p_actions, hypotheses, h_mask, h_actions):
+    def evaluate_actions(self, premises, p_mask, p_actions, hypotheses, h_mask, h_actions):
         p_parser_embed = self.dropout(self.parser_embedding(premises))
         h_parser_embed = self.dropout(self.parser_embedding(hypotheses))
         p_normalized_entropy, _, p_actions_log_prob = self.parser(p_parser_embed, p_mask, eval_actions=p_actions)[2:]

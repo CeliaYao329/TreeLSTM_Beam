@@ -35,30 +35,30 @@ class LstmRnn(nn.Module):
         for idx in range(L):
             idx = L - 1 - idx if backward else idx
             mask_idx = mask[:, idx, None]
-            # mask_idx: the idx column but with size[B, 1] not [B]
+            # mask_idx: the column at idx but with size[B, 1] not [B]
             h_idx, c_idx = self.lstm(x[:, idx], (prev_h, prev_c))
-            # TODO not 100% sure of the use of mask and its relation with h/c
+            # if location idx is not masked, prev_h will be updated; otherwise, prev_h stays the same
             prev_h = h_idx * mask_idx + prev_h * (1. - mask_idx)
             prev_c = c_idx * mask_idx + prev_c * (1. - mask_idx)
             # prev_h [B, hidden_dim]
             h.append(prev_h)
         # return [B, L, hidden_dim]
-        return torch.stack(h[::-1] if backward else h, dim=1)
+        return torch.stack(h[::-1] if backward else h, dim=1) # stack all the h together
 
 
 class BinaryTreeBasedModule(nn.Module):
     def __init__(self, input_dim, hidden_dim, dropout_prob, trans_hidden_dim):
         super().__init__()
-        self.lstm = LstmRnn(input_dim, trans_hidden_dim)
-        self.linear = nn.Linear(in_features=input_dim, out_features=2 * hidden_dim)
+        self.trans_lstm = LstmRnn(input_dim, trans_hidden_dim)
+        self.trans_linear = nn.Linear(in_features=trans_hidden_dim, out_features=2 * hidden_dim)
         self.tree_lstm_cell = BinaryTreeLstmCell(hidden_dim, dropout_prob)
         BinaryTreeBasedModule.reset_parameters(self)
 
     def reset_parameters(self):
-        nn.init.orthogonal_(self.linear.weight)
-        nn.init.constant_(self.linear.bias, val=0)
+        nn.init.orthogonal_(self.trans_linear.weight)
+        nn.init.constant_(self.trans_linear.bias, val=0)
         self.tree_lstm_cell.reset_parameters()
-        self.lstm.reset_parameters()
+        self.trans_lstm.reset_parameters()
 
     def forward(self, *inputs):
         raise NotImplementedError
@@ -69,10 +69,9 @@ class BinaryTreeBasedModule(nn.Module):
         # x: [B, L, input_dim]
         # mask: [B, L]
         # return two [B, L, hidden_dim] tensors --> h, c
-        x = self.lstm(x, mask)
-        return self.linear(x).tanh().chunk(chunks=2, dim=-1)
+        x = self.trans_lstm(x, mask)
+        return self.trans_linear(x).tanh().chunk(chunks=2, dim=-1)
 
-    # TODO(siyu) purpose of mask
     @staticmethod
     def _merge(actions, h_l, c_l, h_r, c_r, h_p, c_p, mask):
         """
@@ -80,7 +79,7 @@ class BinaryTreeBasedModule(nn.Module):
         but still, has to apply correct masking.
         """
         cumsum = torch.cumsum(actions, dim=-1)      # [B, L-k, 1] [0, 0, 1, 1, 1]
-        mask_l = (1.0 - cumsum)[..., None]          # [B, L-k, 1] [1, 1, 0, 0, 0]
+        mask_l = (1.0 - cumsum)[..., None]          # [B, L-k, 1] [1, 1, 0, 0, 0]   # adding one dimension so that if can * elementwise
         mask_r = (cumsum - actions)[..., None]      # [B, L-k, 1] [0, 0 ,0, 1, 1]
         mask = mask[..., None]                      # [B, L-k, 1] [1, 1, 1, 1, 1]
         actions = actions[..., None]                # [B, L-k, 1] [0, 0, 1, 0, 0]
@@ -90,6 +89,7 @@ class BinaryTreeBasedModule(nn.Module):
         # action that uses padding token can't be sampled if the row of a mask is a nonzero vector).
         # Eventually, you will end up with the leftmost state on the top that contains a correct required value.
 
+        # TODO(siyu): why adding left for masked positions, should have no effect
         h_p = (mask_l * h_l + actions * h_p + mask_r * h_r) * mask + h_l * (1. - mask)
         c_p = (mask_l * c_l + actions * c_p + mask_r * c_r) * mask + c_l * (1. - mask)
         return h_p, c_p

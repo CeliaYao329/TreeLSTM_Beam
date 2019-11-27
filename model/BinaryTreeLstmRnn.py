@@ -2,8 +2,8 @@ from model.BinaryTreeBasedModule import BinaryTreeBasedModule
 
 
 class BinaryTreeLstmRnn(BinaryTreeBasedModule):
-    def __init__(self, input_dim, hidden_dim, dropout_prob=None):
-        super().__init__(input_dim, hidden_dim, dropout_prob)
+    def __init__(self, input_dim, hidden_dim, dropout_prob, trans_hidden_dim):
+        super().__init__(input_dim, hidden_dim, dropout_prob, trans_hidden_dim)
 
     def forward(self, x, parse_tree, mask):
         h, c = self._transform_leafs(x, mask)

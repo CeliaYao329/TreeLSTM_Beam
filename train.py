@@ -13,21 +13,24 @@ from model.utils import AverageMeter
 from nli.NLIDataset import NliDataset
 from nli.nli_models.PpoModel import PpoModel
 
+
 def get_logger(exp_name):
     log_path = "nli/logs/log"
     if not os.path.exists(log_path):
         os.makedirs(log_path)
     logger = logging.getLogger("general_logger")
-    handler = logging.FileHandler(f"{log_path}/{exp_name}.log", mode='w')
+    handler = logging.FileHandler(f"{log_path}/exp-{exp_name}.log", mode='w')
     formatter = logging.Formatter("%(asctime)s - %(message)s", "%d-%m-%Y %H:%M:%S")
     handler.setFormatter(formatter)
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
+    print(f"Logger path: {log_path}/exp-{exp_name}.log")
+    logger.info(f"args: {str(args)}")
     return logger
 
 
 def get_summary_writer(exp_name):
-    tensorboard_path = f"nli/logs/tensorboard"
+    tensorboard_path = "nli/logs/tensorboard"
     if not os.path.exists(tensorboard_path):
         os.makedirs(tensorboard_path)
     summary_writer = dict()
@@ -52,7 +55,7 @@ def get_dataloader(args):
     valid_data = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, drop_last=False,
                             collate_fn=NliDataset.collate_fn, pin_memory=True)
     test_data = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, drop_last=False,
-                   collate_fn=NliDataset.collate_fn, pin_memory=True)
+                           collate_fn=NliDataset.collate_fn, pin_memory=True)
 
     with h5py.File(f"data/nli/glove_lower={args.lower}.h5", 'r') as f:
         id_to_glove = f["glove"][...]
@@ -64,13 +67,6 @@ def get_dataloader(args):
 
 
 def get_optimizer(args, policy_parameters, env_parameters):
-    if args.env_optimizer == "adam":
-        env_optimizer_class = torch.optim.Adam
-    elif args.env_optimizer == "adadelta":
-        env_optimizer_class = torch.optim.Adadelta
-    else:
-        env_optimizer_class = torch.optim.SGD
-
     if args.pol_optimizer == "adam":
         pol_optimizer_class = torch.optim.Adam
     elif args.pol_optimizer == "adadelta":
@@ -78,10 +74,20 @@ def get_optimizer(args, policy_parameters, env_parameters):
     else:
         pol_optimizer_class = torch.optim.SGD
 
+    if args.env_optimizer == "adam":
+        env_optimizer_class = torch.optim.Adam
+    elif args.env_optimizer == "adadelta":
+        env_optimizer_class = torch.optim.Adadelta
+    else:
+        env_optimizer_class = torch.optim.SGD
+
     optimizer = {"policy": pol_optimizer_class(params=policy_parameters, lr=args.pol_lr, weight_decay=args.l2_weight),
                  "environment": env_optimizer_class(params=env_parameters, lr=args.env_lr, weight_decay=args.l2_weight)}
-    scheduler = {"policy": lr_scheduler.ReduceLROnPlateau(optimizer=optimizer["policy"], mode="max", factor=0.5, patience=10, verbose=True),
-                    "environment": lr_scheduler.ReduceLROnPlateau(optimizer=optimizer["environment"], mode="max", factor=0.5, patience=10, verbose=True)}
+    scheduler = {
+        "policy": lr_scheduler.ReduceLROnPlateau(optimizer=optimizer["policy"], mode="max", factor=0.5, patience=10,
+                                                 verbose=True),
+        "environment": lr_scheduler.ReduceLROnPlateau(optimizer=optimizer["environment"], mode="max", factor=0.5,
+                                                      patience=10, verbose=True)}
     return optimizer, scheduler
 
 
@@ -135,7 +141,11 @@ def validate(valid_data, model, epoch, device, logger, summary_writer):
                 hypotheses = hypotheses.to(device=device)
                 h_mask = h_mask.to(device=device)
 
-            pred_labels, ce_loss, rewards, actions, actions_log_prob, entropy, normalized_entropy = model(premises, p_mask, hypotheses, h_mask, labels)
+            pred_labels, ce_loss, rewards, actions, actions_log_prob, entropy, normalized_entropy = model(premises,
+                                                                                                          p_mask,
+                                                                                                          hypotheses,
+                                                                                                          h_mask,
+                                                                                                          labels)
             entropy = entropy.mean()
             normalized_entropy = normalized_entropy.mean()
             n = p_mask.shape[0]
@@ -159,12 +169,15 @@ def train(train_data, valid_data, model, optimizers, schedulers, epoch, args, lo
     accuracy_meter = AverageMeter()
     entropy_meter = AverageMeter()
     n_entropy_meter = AverageMeter()
+    # TODO(siyu) why tracking prob ratio
     prob_ratio_meter = AverageMeter()
 
     device = args.gpu_id
     model.train()
+    # TODO(siyu) handle with loading models
     global best_val_accuracy
-    with tqdm(total=len(train_data), desc=f"Train Epoch #{epoch+1}")  as t:
+
+    with tqdm(total=len(train_data), desc=f"Train Epoch #{epoch + 1}") as t:
         for batch_idx, (labels, premises, p_mask, hypotheses, h_mask) in enumerate(train_data):
             if torch.cuda.is_available():
                 labels = labels.to(device=device)
@@ -172,7 +185,11 @@ def train(train_data, valid_data, model, optimizers, schedulers, epoch, args, lo
                 p_mask = p_mask.to(device=device)
                 hypotheses = hypotheses.to(device=device)
                 h_mask = h_mask.to(device=device)
-            pred_labels, ce_loss, rewards, actions, actions_log_prob, entropy, normalized_entropy = model(premises, p_mask, hypotheses, h_mask, labels)
+            pred_labels, ce_loss, rewards, actions, actions_log_prob, entropy, normalized_entropy = model(premises,
+                                                                                                          p_mask,
+                                                                                                          hypotheses,
+                                                                                                          h_mask,
+                                                                                                          labels)
             ce_loss.backward()
             optimizers["environment"].step()
             optimizers["environment"].zero_grad()
@@ -180,8 +197,10 @@ def train(train_data, valid_data, model, optimizers, schedulers, epoch, args, lo
                 if k == 0:
                     new_normalized_entropy, new_actions_log_prob = normalized_entropy, actions_log_prob
                 else:
-                    new_normalized_entropy, new_actions_log_prob = model.evaluate_actions(premises, p_mask, actions["p_actions"],
-                                               hypotheses, h_mask, actions["h_actions"])
+                    new_normalized_entropy, new_actions_log_prob = model.evaluate_actions(premises, p_mask,
+                                                                                          actions["p_actions"],
+                                                                                          hypotheses, h_mask,
+                                                                                          actions["h_actions"])
                 prob_ratio = (new_actions_log_prob - actions_log_prob.detach()).exp()
                 clamped_prob_ratio = prob_ratio.clamp(1.0 - args.epsilon, 1.0 + args.epsilon)
                 ppo_loss = torch.max(prob_ratio * rewards, clamped_prob_ratio * rewards).mean()
@@ -189,6 +208,7 @@ def train(train_data, valid_data, model, optimizers, schedulers, epoch, args, lo
                 loss.backward()
                 optimizers["policy"].step()
                 optimizers["policy"].zero_grad()
+
             entropy = entropy.mean()
             normalized_entropy = normalized_entropy.mean()
             n = p_mask.shape[0]
@@ -209,14 +229,13 @@ def train(train_data, valid_data, model, optimizers, schedulers, epoch, args, lo
 
             global_step += 1
 
-            if (batch_idx+1) % (len(train_data) // 10) == 0:
+            if (batch_idx + 1) % (len(train_data) // 10) == 0:
 
                 logger.info(f"Train: epoch: {epoch} batch_idx: {batch_idx + 1} ce_loss: {ce_loss_meter.avg:.4f} "
                             f"accuracy: {accuracy_meter.avg:.4f} entropy: {entropy_meter.avg:.4f} "
                             f"n_entropy: {n_entropy_meter.avg:.4f}")
                 new_val_accuracy = validate(valid_data, model, epoch, device, logger, summary_writer)
-                print(f"validationg accuracy: {new_val_accuracy}")
-                # TODO(siyu) how scheduler works
+                # print(f"validationg accuracy: {new_val_accuracy:.4f}")
                 schedulers["environment"].step(new_val_accuracy)
                 schedulers["policy"].step(new_val_accuracy)
                 global best_model_path, best_val_accuracy
@@ -225,14 +244,14 @@ def train(train_data, valid_data, model, optimizers, schedulers, epoch, args, lo
                     if not os.path.exists(model_dir):
                         os.makedirs(model_dir)
                     best_model_path = f"{args.model_dir}/{exp_name}/{epoch}-{batch_idx}.mdl"
-                    logger.info("saving model to"+best_model_path)
-                    torch.save({"epoch":epoch, "batch_idx": batch_idx, "state_dict": model.state_dict()}, best_model_path)
+                    logger.info("saving model to" + best_model_path)
+                    torch.save({"epoch": epoch, "batch_idx": batch_idx, "state_dict": model.state_dict()},
+                               best_model_path)
                     best_val_accuracy = new_val_accuracy
+                model.train()
 
             t.set_postfix({'loss': ce_loss_meter.avg,
                            'accuracy': 100. * accuracy_meter.avg})
-                           # 'env_lr': schedulers["environment"].get_lr(),
-                           # 'policy_lr': schedulers["policy"].get_lr()})
             t.update(1)
 
 
@@ -241,14 +260,16 @@ def main(args):
     logger = get_logger(exp_name)
     summary_writer = get_summary_writer(exp_name)
 
+    # TODO(siyu) checking dataloader
     train_data, valid_data, test_data, vectors = get_dataloader(args)
-    print("dataset size: ", len(train_data), len(valid_data), len(test_data))
+    # TODO(siyu): adding baseline
     model = PpoModel(vocab_size=args.vocab_size,
                      word_dim=args.word_dim,
                      hidden_dim=args.hidden_dim,
                      mlp_hidden_dim=args.mlp_hidden_dim,
                      label_dim=args.label_size,
                      dropout_prob=args.dropout_prob,
+                     trans_hidden_dim=args.trans_hidden_dim,
                      use_batchnorm=args.use_batchnorm)
     if torch.cuda.is_available():
         model = model.cuda(args.gpu_id)
@@ -261,7 +282,9 @@ def main(args):
         model.tree_embedding.weight.requires_grad = False
         logger.info("Using frozen embedding for parser and tree embedding layers.")
 
-    optimizers, schedulers = get_optimizer(args, policy_parameters=model.get_policy_parameters(), env_parameters=model.get_environment_parameters())
+    # TODO(siyu) adding early parsing
+    optimizers, schedulers = get_optimizer(args, policy_parameters=model.get_policy_parameters(),
+                                           env_parameters=model.get_environment_parameters())
 
     for epoch in range(args.max_epoch):
         train(train_data, valid_data, model, optimizers, schedulers, epoch, args, logger, summary_writer, exp_name)
@@ -272,9 +295,9 @@ def main(args):
 
 if __name__ == "__main__":
     args = {
-        "gpu-id": 0,
+        "gpu-id": -1,
         "lower": "True",
-        "batch-size": 8,
+        "batch-size": 64,
         "use-batchnorm": "True",
         "dropout-prob": 0.1,
         "max-len": 120,
@@ -291,7 +314,8 @@ if __name__ == "__main__":
         "env-lr": 1.0,
         "pol-lr": 1.0,
         "epsilon": 0.2,
-        "model-dir": "nli/checkpoints",
+        "model-dir": "./nli/checkpoints",
+        "trans-hidden-dim": 256,
     }
 
     parser = argparse.ArgumentParser()
@@ -320,6 +344,7 @@ if __name__ == "__main__":
     parser.add_argument("--pol-lr", required=False, default=args["pol-lr"], type=float)
     parser.add_argument("--epsilon", required=False, default=args["epsilon"], type=float)
     parser.add_argument("--model-dir", required=False, default=args["model-dir"], type=str)
+    parser.add_argument("--trans-hidden-dim", required=False, default=args["trans-hidden-dim"], type=int)
 
     global_step = 0
     best_model_path = None
